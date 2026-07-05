@@ -3,3 +3,4 @@ pub mod gex;
 pub mod mkt_summary;
 pub mod option_chain;
 pub mod orderbook;
+pub mod trades;

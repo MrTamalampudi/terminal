@@ -32,7 +32,7 @@ pub fn create_ticker_row() -> Box {
     let change_label = Label::builder().label("+201.10 (+0.84%)").build();
 
     // Add a custom class so we can color it green in CSS
-    change_label.add_css_class("positive-text");
+    change_label.add_css_class("buy");
 
     // 4. Assemble the widget tree
     right_box.append(&price_label);

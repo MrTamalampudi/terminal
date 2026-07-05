@@ -67,20 +67,18 @@ fn build_header(size_group: &SizeGroup) -> Box {
         .build();
 
     let h_qty = Label::builder()
-        .label("<b>Qty(Orders)</b>")
-        .use_markup(true)
+        .label("Qty(Orders)")
         .halign(Align::Start)
         .hexpand(true)
-        .css_classes(["cell", "chain-header"])
+        .css_classes(["cell"])
         .build();
 
     let h_bid = Label::builder()
-        .label("<b>Bid</b>")
-        .use_markup(true)
+        .label("Bid")
         .halign(Align::End)
         .hexpand(true)
         .xalign(1.0)
-        .css_classes(["cell", "chain-header"])
+        .css_classes(["cell"])
         .build();
 
     let h_sno = Label::builder()
@@ -91,20 +89,18 @@ fn build_header(size_group: &SizeGroup) -> Box {
         .build();
 
     let h_ask = Label::builder()
-        .label("<b>Ask</b>")
-        .use_markup(true)
+        .label("Ask")
         .hexpand(true)
         .xalign(0.0)
         .halign(Align::Start)
-        .css_classes(["cell", "chain-header"])
+        .css_classes(["cell"])
         .build();
 
     let h_o_qty = Label::builder()
-        .label("<b>(Orders)Qty</b>")
-        .use_markup(true)
+        .label("(Orders)Qty")
         .halign(Align::End)
         .hexpand(true)
-        .css_classes(["cell", "chain-header"])
+        .css_classes(["cell"])
         .build();
 
     // Align headers with their respective data columns
@@ -143,13 +139,13 @@ fn build_row(index: usize, size_group: &SizeGroup) -> (Box, RowUI) {
         .build();
 
     let lbl_bid_size = Label::builder()
-        .css_classes(["cell", "text-bid"])
+        .css_classes(["cell", "buy"])
         .halign(Align::Start)
         .xalign(0.0)
         .build();
 
     let lbl_bid_orders = Label::builder()
-        .css_classes(["orders", "text-bid"])
+        .css_classes(["orders", "buy"])
         .halign(Align::Start)
         .xalign(0.0)
         .build();
@@ -206,14 +202,14 @@ fn build_row(index: usize, size_group: &SizeGroup) -> (Box, RowUI) {
         .build();
 
     let lbl_ask_orders = Label::builder()
-        .css_classes(["orders", "text-ask"])
+        .css_classes(["orders", "sell"])
         .halign(Align::End)
         .hexpand(true)
         .xalign(1.0)
         .build();
 
     let lbl_ask_size = Label::builder()
-        .css_classes(["cell", "text-ask"])
+        .css_classes(["cell", "sell"])
         .halign(Align::End)
         .xalign(1.0)
         .build();

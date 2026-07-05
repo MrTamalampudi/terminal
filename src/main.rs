@@ -1,23 +1,11 @@
-use std::mem::transmute;
-
-use futures_util::{SinkExt, StreamExt};
-use http::Request;
-use prost::Message as ProstMessage;
 use serde::Serialize;
-use tokio_tungstenite::{connect_async, tungstenite::protocol::Message as WsMessage};
-use url::Url;
 
-use gio::ListStore;
-use glib::BoxedAnyObject;
-use gtk4::{
-    Align, Application, ApplicationWindow, Box, Grid, Label, ListView, NoSelection, Orientation,
-    ScrolledWindow, SignalListItemFactory, SizeGroup, SizeGroupMode, Widget, prelude::*,
+use gtk4::{Application, ApplicationWindow, Box, Orientation, prelude::*};
+
+use crate::{
+    frontend::{orderbook::model::OrderBook, trades::trades},
+    ui::load_custom_css,
 };
-
-use crate::{frontend::orderbook::model::OrderBook, ui::load_custom_css};
-
-// --- 1. PROTOBUF GENERATED TYPES ---
-// (Normally this is included via build.rs, but kept inline here as per your snippet)
 
 mod backend;
 mod frontend;
@@ -100,9 +88,11 @@ fn build_ui(app: &Application) {
         .margin_end(12)
         .build();
 
+    main_layout.append(&trades());
     main_layout.append(&order_book_widget_ce);
     main_layout.append(&order_book_widget_fut);
     main_layout.append(&order_book_widget_pe);
+    main_layout.append(&trades());
 
     let window = ApplicationWindow::builder()
         .application(app)
