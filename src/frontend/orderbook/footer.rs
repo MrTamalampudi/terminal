@@ -13,14 +13,14 @@ pub fn footer() -> (Widget, FooterUI) {
         .build();
 
     let total_buy_qty = Label::builder()
-        .css_classes(["cell", "cell-flush-left", "buy"])
+        .css_classes(["cell", "buy"])
         .halign(Align::Start)
         .xalign(0.0)
         .hexpand(true)
         .label("-")
         .build();
     let total_sell_qty = Label::builder()
-        .css_classes(["cell", "cell-flush-right", "sell"])
+        .css_classes(["cell", "sell"])
         .halign(Align::End)
         .xalign(1.0)
         .hexpand(true)

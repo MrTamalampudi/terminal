@@ -1,4 +1,4 @@
-mod hsm;
+pub mod hsm;
 
 pub mod tbt_ws;
 pub mod fyers_tbt {

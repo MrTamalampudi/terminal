@@ -1,8 +1,12 @@
+use std::sync::Arc;
+
 use serde::Serialize;
 
 use gtk4::{Application, ApplicationWindow, Box, Orientation, prelude::*};
+use serde_json::Value;
 
 use crate::{
+    backend::hsm::data_socket::FyersDataSocket,
     frontend::{orderbook::model::OrderBook, trades::trades},
     ui::load_custom_css,
 };
@@ -10,50 +14,6 @@ use crate::{
 mod backend;
 mod frontend;
 mod ui;
-
-// JSON Serialization structs for the subscription request
-#[derive(Serialize)]
-struct SubscribeData {
-    subs: i32,
-    symbols: Vec<String>,
-    mode: String,
-    channel: String,
-}
-
-#[derive(Serialize)]
-struct SubscribeMsg {
-    #[serde(rename = "type")]
-    msg_type: i32,
-    data: SubscribeData,
-}
-
-#[derive(Serialize)]
-struct SwitchChannelData {
-    #[serde(rename = "resumeChannels")]
-    resume_channels: Vec<String>,
-    #[serde(rename = "pauseChannels")]
-    pause_channels: Vec<String>,
-}
-
-#[derive(Serialize)]
-struct SwitchChannelMsg {
-    #[serde(rename = "type")]
-    msg_type: i32,
-    data: SwitchChannelData,
-}
-
-// --- 2. UI DATA MODEL ---
-// Added Clone so we can fetch, modify, and replace rows in the GTK ListStore
-#[derive(Clone, Default, Debug)]
-pub struct OrderRow {
-    pub bid_qty: i32,
-    pub bid_orders: i32,
-    pub bid_price: f32,
-    pub ask_price: f32,
-    pub ask_qty: i32,
-    pub ask_orders: i32,
-    pub index: u32, // Changed to u32 to match Fyers protobuf `num`
-}
 
 // --- 3. MAIN APP ENTRY POINT ---
 fn main() -> glib::ExitCode {
@@ -88,11 +48,11 @@ fn build_ui(app: &Application) {
         .margin_end(12)
         .build();
 
-    main_layout.append(&trades());
+    // main_layout.append(&trades());
     main_layout.append(&order_book_widget_ce);
     main_layout.append(&order_book_widget_fut);
     main_layout.append(&order_book_widget_pe);
-    main_layout.append(&trades());
+    //main_layout.append(&trades());
 
     let window = ApplicationWindow::builder()
         .application(app)
@@ -106,7 +66,66 @@ fn build_ui(app: &Application) {
     // Spawn a standard OS thread that will host the Tokio async runtime
     std::thread::spawn(move || {
         let rt = tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime");
+        // rt.block_on(async {
+        //     if let Err(e) = backend::tbt_ws::run_fyers_websocket(sender).await {
+        //         eprintln!("WebSocket Client Error: {:#?}", e);
+        //     }
+        // });
         rt.block_on(async {
+            // let app_id = "xx";
+            // let access_token = "xxx"; // Replace with your Access Token
+
+            // let on_message = Arc::new(|msg: Value| {
+            //     println!("📥 [Fyers Message]: {}", msg);
+            // });
+
+            // let on_error = Arc::new(|err: Value| {
+            //     eprintln!("❌ [Fyers Error]: {}", err);
+            // });
+
+            // // 3. Initialize the WebSocket struct
+            // let socket = FyersDataSocket::new(
+            //     format!("{}:{}", app_id, access_token).as_str(),
+            //     false, // write_to_file
+            //     None,  // log_path
+            //     false, // litemode (false = Full mode)
+            //     true,  // auto-reconnect
+            //     5,     // max reconnect retries
+            //     Some(on_message as Arc<dyn Fn(Value) + Send + Sync>),
+            //     Some(on_error as Arc<dyn Fn(Value) + Send + Sync>),
+            // );
+
+            // println!("Starting Fyers WebSocket connection...");
+
+            // // 4. Connect to the WebSocket (this spawns background Tokio tasks and returns immediately)
+            // socket.connect();
+
+            // // 5. Wait a brief moment to allow the handshake and HSM token auth to complete
+            // tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+
+            // // 6. Subscribe to your symbols
+            // let symbols = vec![
+            //     "NSE:NIFTY2670724450CE".to_string(),
+            //     "NSE:NIFTY50-INDEX".to_string(),
+            // ];
+
+            // println!("Subscribing to symbols: {:?}", symbols);
+
+            // // Note: Since we changed `subscribe` to be `async` in the previous fix, we must `.await` it here!
+            // socket.subscribe(symbols.clone(), "SymbolUpdate", 11).await;
+
+            // // 7. Keep the main thread alive indefinitely to listen to the incoming stream.
+            // // We use tokio::signal::ctrl_c() to cleanly catch a Ctrl+C shutdown.
+            // println!("Streaming active. Press Ctrl+C to exit.");
+            // match tokio::signal::ctrl_c().await {
+            //     Ok(()) => {
+            //         println!("\nShutting down Fyers socket...");
+            //     }
+            //     Err(err) => {
+            //         eprintln!("Unable to listen for shutdown signal: {}", err);
+            //     }
+            // }
+
             if let Err(e) = backend::tbt_ws::run_fyers_websocket(sender).await {
                 eprintln!("WebSocket Client Error: {:#?}", e);
             }
@@ -273,64 +292,3 @@ fn update_store_with_feed(store: &OrderBook, feed: backend::fyers_tbt::MarketFee
         }
     }
 }
-
-// --- 5. DATA BINDING LOGIC ---
-// fn update_store_with_feed(store: &ListStore, feed: backend::fyers_tbt::MarketFeed) {
-//     if let Some(depth) = feed.depth {
-//         // Update Bids
-//         for bid in depth.bids {
-//             let idx = bid.num.unwrap_or(0);
-//             if idx < 50 {
-//                 // Fetch existing row, modify it, and splice it back to trigger UI update
-//                 if let Some(item) = store.item(idx) {
-//                     let boxed = item.downcast_ref::<BoxedAnyObject>().unwrap();
-//                     let mut row = boxed.borrow::<frontend::orderbook::OrderRow>().clone();
-
-//                     if let Some(value) = bid.qty {
-//                         row.bid_qty = value as i32;
-//                     }
-//                     if let Some(value) = bid.nord {
-//                         row.bid_orders = value as i32;
-//                     }
-//                     if let Some(value) = bid.price {
-//                         row.bid_price = value as f32 / 100.0;
-//                     }
-
-//                     //row.bid_qty = bid.qty.unwrap_or(0) as i32;
-//                     //row.bid_orders = bid.nord.unwrap_or(0) as i32;
-//                     // Note: You may need to divide by 100 based on Fyers ticksize multiplier
-//                     //row.bid_price = bid.price.unwrap_or(0) as f32 / 100.0;
-
-//                     store.splice(idx, 1, &[BoxedAnyObject::new(row)]);
-//                 }
-//             }
-//         }
-
-//         // Update Asks
-//         for ask in depth.asks {
-//             let idx = ask.num.unwrap_or(0);
-//             if idx < 50 {
-//                 if let Some(item) = store.item(idx) {
-//                     let boxed = item.downcast_ref::<BoxedAnyObject>().unwrap();
-//                     let mut row = boxed.borrow::<frontend::orderbook::OrderRow>().clone();
-
-//                     if let Some(value) = ask.qty {
-//                         row.ask_qty = value as i32;
-//                     }
-//                     if let Some(value) = ask.nord {
-//                         row.ask_orders = value as i32;
-//                     }
-//                     if let Some(value) = ask.price {
-//                         row.ask_price = value as f32 / 100.0;
-//                     }
-
-//                     //row.ask_qty = ask.qty.unwrap_or(0) as i32;
-//                     // row.ask_orders = ask.nord.unwrap_or(0) as i32;
-//                     // row.ask_price = ask.price.unwrap_or(0) as f32 / 100.0;
-
-//                     store.splice(idx, 1, &[BoxedAnyObject::new(row)]);
-//                 }
-//             }
-//         }
-//     }
-// }

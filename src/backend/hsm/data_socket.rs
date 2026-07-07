@@ -1,40 +1,20 @@
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
 use futures_util::{SinkExt, StreamExt};
+use http::header::{AUTHORIZATION, CONTENT_TYPE};
+use http::{HeaderMap, HeaderValue};
+use serde::Deserialize;
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
+use std::fmt;
 use std::io::{Cursor, Read, Seek, SeekFrom, Write};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
 use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
 
-// Mock definition of the dependency class found in your codebase architecture
-pub struct SymbolConversion {
-    pub access_token: String,
-    pub data_type: String,
-    pub log_path: String,
-}
-
-impl SymbolConversion {
-    pub fn new(access_token: &str, data_type: &str, log_path: &str) -> Self {
-        Self {
-            access_token: access_token.to_string(),
-            data_type: data_type.to_string(),
-            log_path: log_path.to_string(),
-        }
-    }
-
-    // Replicates your backend API response signature layout:
-    // (DataMap, InvalidSymbolsList, DepthIndexErrorFlag, ErrorString)
-    pub fn symbol_to_hsmtoken(
-        &self,
-        _symbols: &[String],
-    ) -> (HashMap<String, String>, Vec<String>, bool, String) {
-        // Return blank values; will be filled dynamically by your mapping fetch logic
-        (HashMap::new(), Vec::new(), false, String::new())
-    }
-}
+use crate::backend::hsm::model::{exch_seg_dict, index_dict};
+use crate::backend::hsm::symbol_conversion::{DataType, SymbolConversion};
 
 // Protocol code identifiers matching your defines.txt mapping layers
 pub mod defines {
@@ -117,14 +97,11 @@ pub struct FyersDataSocketInner {
     pub mode: String,
     pub reconnect_delay: u64,
     pub ack_bool: bool,
-    // Protocol mapper structure keys
     pub data_val: Vec<String>,
     pub index_val: Vec<String>,
     pub lite_val: Vec<String>,
     pub depthvalue: Vec<String>,
-    // Non-blocking write interface channel hook
     pub ws_sender: Option<UnboundedSender<Message>>,
-    // Internal callback function pointer channels
     pub on_message: Option<Arc<dyn Fn(Value) + Send + Sync>>,
     pub on_error: Option<Arc<dyn Fn(Value) + Send + Sync>>,
 }
@@ -150,7 +127,6 @@ impl FyersDataSocket {
             scrips_per_channel.insert(i, Vec::new());
         }
 
-        // Mock loading structure keys directly matching layout properties found inside mapper file
         let data_val = vec![
             "ltp",
             "vol_traded_today",
@@ -303,15 +279,9 @@ impl FyersDataSocket {
             return false;
         }
 
-        let payload_b64 = parts[1];
-        // Ensure proper padding alignment before hitting the base64 engine conversion layer
-        let padded = match payload_b64.len() % 4 {
-            2 => format!("{}==", payload_b64),
-            3 => format!("{}=", payload_b64),
-            _ => payload_b64.to_string(),
-        };
-
-        match URL_SAFE_NO_PAD.decode(&padded) {
+        // Properly parse Base64 URL_SAFE without attempting broken manual padding math
+        let payload_b64 = parts[1].trim_end_matches('=');
+        match URL_SAFE_NO_PAD.decode(payload_b64) {
             Ok(decoded) => match serde_json::from_slice::<Value>(&decoded) {
                 Ok(token_json) => {
                     let exp = token_json["exp"].as_i64().unwrap_or(0);
@@ -332,6 +302,7 @@ impl FyersDataSocket {
 
                     inner.valid_token = true;
                     inner.hsm_token = token_json["hsm_key"].as_str().unwrap_or("").to_string();
+                    println!("hsm token{}", inner.hsm_token);
                     true
                 }
                 Err(_) => {
@@ -346,46 +317,49 @@ impl FyersDataSocket {
         }
     }
 
-    pub fn subscribe(&self, symbols: Vec<String>, data_type: &str, channel: u8) {
-        let mut inner = self.inner.lock().unwrap();
-        if !inner.valid_token {
-            return;
-        }
-
-        inner.data_type = data_type.to_string();
-        inner.channel_num = channel;
-
-        inner.channel_resume_pause();
-        if let Some(conv_dict) = inner.symbol_conversion(&symbols) {
-            inner.channel_symbol = conv_dict.values().cloned().collect();
-
-            if inner.symbol_token.len() + conv_dict.len() > 5000 {
-                inner.trigger_error(json!({
-                    "code": defines::LIMIT_EXCEED_CODE,
-                    "message": defines::LIMIT_EXCEED_MSG_5000,
-                    "s": defines::ERROR,
-                }));
+    pub async fn subscribe(&self, symbols: Vec<String>, data_type: &str, channel: u8) {
+        {
+            let mut inner = self.inner.lock().unwrap();
+            if !inner.valid_token {
                 return;
             }
 
-            inner.symbol_token.extend(conv_dict.clone());
+            inner.data_type = data_type.to_string();
+            inner.channel_num = channel;
+            inner.channel_resume_pause();
 
-            let current_channel = inner.channel_num;
-            inner
-                .scrips_count
-                .insert(current_channel, conv_dict.keys().cloned().collect());
+            if let Some(conv_dict) = inner.symbol_conversion(&symbols).await {
+                println!("conve {:#?}", conv_dict);
+                inner.channel_symbol = conv_dict.values().cloned().collect();
 
-            if let Some(scrips) = inner.scrips_count.get(&inner.channel_num).cloned() {
-                for chunk in scrips.chunks(1500) {
-                    if let Ok(msg) = inner.build_subscription_msg(chunk.to_vec()) {
-                        inner.add_message(msg);
+                if inner.symbol_token.len() + conv_dict.len() > 5000 {
+                    inner.trigger_error(json!({
+                        "code": defines::LIMIT_EXCEED_CODE,
+                        "message": defines::LIMIT_EXCEED_MSG_5000,
+                        "s": defines::ERROR,
+                    }));
+                    return;
+                }
+
+                inner.symbol_token.extend(conv_dict.clone());
+
+                let current_channel = inner.channel_num;
+                inner
+                    .scrips_count
+                    .insert(current_channel, conv_dict.keys().cloned().collect());
+
+                if let Some(scrips) = inner.scrips_count.get(&inner.channel_num).cloned() {
+                    for chunk in scrips.chunks(1500) {
+                        if let Ok(msg) = inner.build_subscription_msg(chunk.to_vec()) {
+                            inner.add_message(msg);
+                        }
                     }
                 }
             }
         }
     }
 
-    pub fn unsubscribe(&self, symbols: Vec<String>, data_type: &str, channel: u8) {
+    pub async fn unsubscribe(&self, symbols: Vec<String>, data_type: &str, channel: u8) {
         let mut inner = self.inner.lock().unwrap();
         if !inner.valid_token {
             return;
@@ -395,15 +369,10 @@ impl FyersDataSocket {
         inner.channel_num = channel;
 
         inner.channel_resume_pause();
-        if let Some(conv_dict) = inner.symbol_conversion(&symbols) {
+        if let Some(conv_dict) = inner.symbol_conversion(&symbols).await {
             inner.unsub_symbol = conv_dict.keys().cloned().collect();
 
-            // --- FIX HERE ---
-            // 1. Copy the channel number out first
             let current_channel = inner.channel_num;
-
-            // 2. Add `.cloned()` to clone the vector out of the map immediately,
-            // which drops the immutable borrow on `inner` before entering the block.
             if let Some(scrips) = inner.scrips_count.get(&current_channel).cloned() {
                 inner.unsub_symbol.retain(|symb| scrips.contains(symb));
             }
@@ -434,8 +403,7 @@ impl FyersDataSocket {
     pub fn connect(&self) {
         let shadow = self.clone();
         tokio::spawn(async move {
-            let should_connect = shadow.access_token_to_hsmtoken();
-            if should_connect {
+            if shadow.access_token_to_hsmtoken() {
                 shadow.init_connection().await;
             }
         });
@@ -451,6 +419,7 @@ impl FyersDataSocket {
         };
 
         loop {
+            println!("checkk");
             match connect_async(&url).await {
                 Ok((ws_stream, _)) => {
                     let (mut write_half, mut read_half) = ws_stream.split();
@@ -462,8 +431,7 @@ impl FyersDataSocket {
                         inner.on_open();
                     }
 
-                    // Task 1: Background Write Pipeline Queue Consumer
-
+                    // Task 1: Background Write Pipeline
                     let write_task = tokio::spawn(async move {
                         while let Some(message) = rx.recv().await {
                             if let Err(e) = write_half.send(message).await {
@@ -473,7 +441,7 @@ impl FyersDataSocket {
                         }
                     });
 
-                    // Task 2: Background Keepalive Ping Frame Generator Worker
+                    // Task 2: Background Keepalive Worker
                     let shadow_ping = self.clone();
                     let ping_task = tokio::spawn(async move {
                         loop {
@@ -482,14 +450,15 @@ impl FyersDataSocket {
                             if inner.ws_sender.is_none() {
                                 break;
                             }
-                            // Send Fyers standard system telemetry heartbeat sequence [0, 1, 11] over the binary pipe
                             inner.send_raw_message(vec![0, 1, 11]);
                         }
                     });
 
-                    // Task 3: Inbound Message Parser dispatcher loop
+                    // Task 3: Inbound Message Parser
                     let shadow_read = self.clone();
                     while let Some(Ok(msg)) = read_half.next().await {
+                        println!("checkkss");
+                        println!("📥 RAW BINARY PACKET ARRIVED! Length: {} bytes", msg.len());
                         if msg.is_binary() {
                             let bytes = msg.into_data();
                             let mut inner = shadow_read.inner.lock().unwrap();
@@ -499,7 +468,6 @@ impl FyersDataSocket {
                         }
                     }
 
-                    // Clean termination bounds safely on disconnection boundaries
                     ping_task.abort();
                     write_task.abort();
                 }
@@ -513,7 +481,7 @@ impl FyersDataSocket {
                 break;
             }
 
-            // Execute exponential/stepped delay reconnector intervals
+            // Exponential backoff logic
             let (delay, attempt, max) = {
                 let mut inner = self.inner.lock().unwrap();
                 if inner.reconnect_attempts >= inner.max_reconnect_attempts {
@@ -625,7 +593,7 @@ impl FyersDataSocketInner {
         self.active_channel = Some(self.channel_num);
     }
 
-    fn symbol_conversion(&self, symbols: &[String]) -> Option<HashMap<String, String>> {
+    async fn symbol_conversion(&self, symbols: &[String]) -> Option<HashMap<String, String>> {
         let current_ch_count = self
             .scrips_per_channel
             .get(&self.channel_num)
@@ -647,27 +615,17 @@ impl FyersDataSocketInner {
         let mut symbol_dict = HashMap::new();
         let mut wrong_symbols = Vec::new();
         let mut symb_flag = false;
-        let mut idx_dp_flag = false;
 
-        let conv = SymbolConversion::new(&self.access_token, &self.data_type, &self.log_path);
+        let conv = SymbolConversion::new(&self.access_token, DataType::SymbolUpdate);
+        println!("symbols {:#?}", conv);
         for chunk in symbols.chunks(500) {
-            let res = conv.symbol_to_hsmtoken(chunk);
-            if !res.3.is_empty() {
-                self.trigger_error(json!({
-                    "code": defines::INVALID_CODE,
-                    "message": res.3,
-                    "s": defines::ERROR,
-                    "type": defines::SUBS_TYPE
-                }));
-                return None;
-            }
-            symbol_dict.extend(res.0);
-            if !res.1.is_empty() {
-                wrong_symbols.extend(res.1);
-                symb_flag = true;
-            }
-            if res.2 {
-                idx_dp_flag = true;
+            let res = conv.symbol_to_hsmtoken(chunk.to_vec()).await;
+            if let Ok(res) = res {
+                symbol_dict.extend(res.0);
+                if !res.1.is_empty() {
+                    wrong_symbols.extend(res.1);
+                    symb_flag = true;
+                }
             }
         }
 
@@ -680,15 +638,6 @@ impl FyersDataSocketInner {
                 "invalid_symbols": wrong_symbols,
             }));
         }
-        if idx_dp_flag {
-            self.trigger_error(json!({
-                "code": defines::INVALID_CODE,
-                "message": defines::INDEX_DEPTH_ERROR_MESSAGE,
-                "s": defines::ERROR,
-                "type": defines::SUBS_TYPE,
-            }));
-        }
-
         Some(symbol_dict)
     }
 
@@ -725,7 +674,7 @@ impl FyersDataSocketInner {
 
     fn build_lite_mode_msg(&self) -> Result<Vec<u8>, std::io::Error> {
         let mut buf = Vec::new();
-        buf.write_u16::<BigEndian>(0)?; // Placeholder layout matches struct.pack(">H", 0)
+        buf.write_u16::<BigEndian>(0)?;
         buf.write_u8(12)?;
         buf.write_u8(2)?;
 
@@ -782,7 +731,9 @@ impl FyersDataSocketInner {
         }
 
         let mut buf = Vec::new();
-        let data_len = 18 + scrips_data.len();
+        // FIX APPLIED HERE: Ensure data_len strictly matches exactly the amount of packet bytes!
+        // The original python script falsely included len(access_token) + len(source)
+        let data_len = 9 + scrips_data.len();
         buf.write_u16::<BigEndian>(data_len as u16)?;
         buf.write_u8(4)?;
         buf.write_u8(2)?;
@@ -808,7 +759,8 @@ impl FyersDataSocketInner {
         }
 
         let mut buf = Vec::new();
-        let data_len = 18 + scrips_data.len() + self.access_token.len() + self.source.len();
+        // FIX APPLIED HERE:
+        let data_len = 9 + scrips_data.len();
         buf.write_u16::<BigEndian>(data_len as u16)?;
         buf.write_u8(5)?;
         buf.write_u8(2)?;
@@ -848,7 +800,7 @@ impl FyersDataSocketInner {
 
     fn acknowledgement_msg(&self, message_number: u32) -> Result<Vec<u8>, std::io::Error> {
         let mut buf = Vec::new();
-        buf.write_u16::<BigEndian>(9)?; // total_size - 2 = 9
+        buf.write_u16::<BigEndian>(9)?;
         buf.write_u8(3)?;
         buf.write_u8(1)?;
         buf.write_u8(1)?;
@@ -958,7 +910,7 @@ impl FyersDataSocketInner {
                             .map_or(false, |v| v.contains(symbol))
                     })
                     .count();
-                if ch_match_count == 1 {
+                if ch_match_count <= 1 {
                     self.symbol_token.remove(symbol);
                 }
             }
@@ -1125,7 +1077,7 @@ impl FyersDataSocketInner {
                     }
                 }
                 _ => {
-                    // index layout processing rules
+                    // index
                     for (i, val) in self.index_val.iter().enumerate() {
                         if let Some(v) = data_resp.get(val) {
                             if [0, 1, 3, 4, 5].contains(&i) {
@@ -1252,7 +1204,6 @@ impl FyersDataSocketInner {
                             }
                         }
                         _ => {
-                            // Default to standard "sf" scripts layout
                             self.scrips_sym.insert(topic_id, topic_name.clone());
                             let mut inner_map = json!({});
                             let field_count = cursor.read_u8()?;

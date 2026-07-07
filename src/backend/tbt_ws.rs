@@ -38,8 +38,8 @@ struct SwitchChannelMsg {
 pub async fn run_fyers_websocket(
     sender: tokio::sync::mpsc::UnboundedSender<super::fyers_tbt::MarketFeed>,
 ) -> Result<(), std::boxed::Box<dyn std::error::Error>> {
-    let app_id = "XXXX-100";
-    let access_token = "XXXXX"; // Replace with your Access Token
+    let app_id = "xx";
+    let access_token = "xx"; // Replace with your Access Token
     let ws_url = "wss://rtsocket-api.fyers.in/versova";
 
     let url = Url::parse(ws_url).unwrap();
@@ -73,8 +73,8 @@ pub async fn run_fyers_websocket(
             subs: 1,
             symbols: vec![
                 "NSE:NIFTY26JULFUT".to_string(),
-                "NSE:NIFTY2670724400CE".to_string(),
-                "NSE:NIFTY2670724300PE".to_string(),
+                "NSE:NIFTY2670724450CE".to_string(),
+                "NSE:NIFTY2670724450PE".to_string(),
             ],
             mode: "depth".to_string(),
             channel: "1".to_string(),
@@ -106,14 +106,13 @@ pub async fn run_fyers_websocket(
                         eprintln!("Fyers Error: {}", decoded_msg.msg);
                         continue;
                     }
-                    //println!("{:#?}\n---\n{:#?}", decoded_msg, bin_data);
                     for (_, feed) in decoded_msg.feeds {
                         let _ = sender.send(feed);
                     }
                 }
             }
             Ok(WsMessage::Ping(ping)) => {
-                eprintln!("ping");
+                println!("ping");
                 write.send(WsMessage::Pong(ping)).await?;
             }
             _ => {}
