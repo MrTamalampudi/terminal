@@ -11,6 +11,7 @@ use crate::frontend::orderbook::table::table;
 mod footer;
 pub mod model;
 mod table;
+pub mod update;
 
 pub fn order_book() -> (Widget, OrderBook) {
     let container = Box::builder()

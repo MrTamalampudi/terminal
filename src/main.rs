@@ -7,12 +7,17 @@ use serde_json::Value;
 
 use crate::{
     backend::hsm::data_socket::FyersDataSocket,
-    frontend::{orderbook::model::OrderBook, trades::trades},
+    frontend::{
+        orderbook::{model::OrderBook, update::update_orderbook},
+        trades::trades,
+    },
+    model::enums::DerivativeType::{self, OPTIONS},
     ui::load_custom_css,
 };
 
 mod backend;
 mod frontend;
+mod model;
 mod ui;
 
 // --- 3. MAIN APP ENTRY POINT ---
@@ -135,160 +140,12 @@ fn build_ui(app: &Application) {
     glib::MainContext::default().spawn_local(async move {
         while let Some(feed) = receiver.recv().await {
             if feed.ticker.ends_with("FUT") {
-                update_store_with_feed(&store_fut, feed);
+                update_orderbook(&store_fut, feed, DerivativeType::FUTURES);
             } else if feed.ticker.ends_with("CE") {
-                update_store_with_feed(&store_ce, feed);
+                update_orderbook(&store_ce, feed, DerivativeType::OPTIONS);
             } else if feed.ticker.ends_with("PE") {
-                update_store_with_feed(&store_pe, feed);
+                update_orderbook(&store_pe, feed, DerivativeType::OPTIONS);
             }
         }
     });
-}
-
-fn update_store_with_feed(store: &OrderBook, feed: backend::fyers_tbt::MarketFeed) {
-    if let Some(depth) = feed.depth {
-        let mut bids_data = store.bids.borrow_mut();
-        let mut asks_data = store.asks.borrow_mut();
-
-        // ==========================================
-        // 1. UPDATE DATA MODELS FROM FEED
-        // ==========================================
-
-        // Update Bids Data
-        for bid in &depth.bids {
-            let idx = bid.num.unwrap_or(0) as usize;
-            if idx < 50 {
-                if let Some(bid_) = bids_data.get_mut(idx) {
-                    if let Some(value) = bid.qty {
-                        bid_.bid_qty = value;
-                    }
-                    if let Some(value) = bid.nord {
-                        bid_.bid_orders = value;
-                    }
-                    if let Some(value) = bid.price {
-                        bid_.bid_price = value;
-                    }
-                }
-            }
-        }
-
-        // Update Asks Data
-        for ask in &depth.asks {
-            let idx = ask.num.unwrap_or(0) as usize;
-            if idx < 50 {
-                if let Some(ask_) = asks_data.get_mut(idx) {
-                    if let Some(value) = ask.qty {
-                        ask_.ask_qty = value;
-                    }
-                    if let Some(value) = ask.nord {
-                        ask_.ask_orders = value;
-                    }
-                    if let Some(value) = ask.price {
-                        ask_.ask_price = value;
-                    }
-                }
-            }
-        }
-
-        // ==========================================
-        // 2. FIND THE MAXIMUM QUANTITIES
-        // ==========================================
-        let max_bid_qty = bids_data.iter().map(|b| b.bid_qty).max().unwrap_or(0);
-        let max_ask_qty = asks_data.iter().map(|a| a.ask_qty).max().unwrap_or(0);
-        // Update Bids
-        for bid in depth.bids {
-            let idx = bid.num.unwrap_or(0);
-            if idx < 50 {
-                // Fetch existing row, modify it, and splice it back to trigger UI update
-                if let Some(row) = store.book.get(idx as usize) {
-                    if let Some(value) = bid.qty {
-                        row.bid_qty.set_label(&value.to_string());
-                    }
-                    if let Some(value) = bid.nord {
-                        row.bid_orders.set_label(&format!("({})", value));
-                    }
-                    if let Some(value) = bid.price {
-                        row.bid_price
-                            .set_label(&format!("{:.2}", value as f32 / 100.0));
-                    }
-                }
-            }
-        }
-
-        // Update Asks
-        for ask in depth.asks {
-            let idx = ask.num.unwrap_or(0);
-            if idx < 50 {
-                if let Some(row) = store.book.get(idx as usize) {
-                    if let Some(value) = ask.qty {
-                        row.ask_qty.set_label(&value.to_string());
-                    }
-                    if let Some(value) = ask.nord {
-                        row.ask_orders.set_label(&format!("({})", value));
-                    }
-                    if let Some(value) = ask.price {
-                        row.ask_price
-                            .set_label(&format!("{:.2}", value as f32 / 100.0));
-                    }
-                }
-            }
-        }
-
-        for idx in 0..50 {
-            if let Some(row) = store.book.get(idx) {
-                // Check Bid Row
-                if let Some(bid_) = bids_data.get(idx) {
-                    if max_bid_qty > 0 && bid_.bid_qty == max_bid_qty {
-                        row.bid_qty.add_css_class("bold");
-                        row.bid_orders.add_css_class("bold");
-                        row.bid_price.add_css_class("bold");
-
-                        store.high.bid_qty.set_label(&row.bid_qty.label());
-                        store.high.bid_orders.set_label(&row.bid_orders.label());
-                        store.high.bid_price.set_label(&row.bid_price.label());
-                    } else {
-                        row.bid_qty.remove_css_class("bold");
-                        row.bid_orders.remove_css_class("bold");
-                        row.bid_price.remove_css_class("bold");
-                    }
-                }
-
-                // Check Ask Row
-                if let Some(ask_) = asks_data.get(idx) {
-                    if max_ask_qty > 0 && ask_.ask_qty == max_ask_qty {
-                        row.ask_qty.add_css_class("bold");
-                        row.ask_orders.add_css_class("bold");
-                        row.ask_price.add_css_class("bold");
-
-                        store.high.ask_qty.set_label(&row.ask_qty.label());
-                        store.high.ask_orders.set_label(&row.ask_orders.label());
-                        store.high.ask_price.set_label(&row.ask_price.label());
-                    } else {
-                        row.ask_qty.remove_css_class("bold");
-                        row.ask_orders.remove_css_class("bold");
-                        row.ask_price.remove_css_class("bold");
-                    }
-                }
-            }
-        }
-
-        //update footer
-        if let (Some(buy), Some(sell)) = (depth.tbq, depth.tsq) {
-            let total = buy + sell;
-            let buy_percentage = if total > 0 {
-                (buy as f64 / total as f64) * 100.0
-            } else {
-                0.0
-            };
-            let sell_percentage = 100.0 - buy_percentage;
-            store
-                .footer
-                .buy
-                .set_label(&format!("{} ({:.2}%)", buy, buy_percentage));
-            store
-                .footer
-                .sell
-                .set_label(&format!("({:.2}%) {}", sell_percentage, sell));
-        }
-    }
 }

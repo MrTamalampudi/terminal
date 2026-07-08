@@ -31,6 +31,8 @@ pub struct Ask {
 pub struct FooterUI {
     pub buy: Label,
     pub sell: Label,
+    pub buy50: Label,
+    pub sell50: Label,
 }
 
 #[derive(Clone)]
